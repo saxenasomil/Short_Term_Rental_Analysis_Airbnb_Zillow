@@ -1,0 +1,4 @@
+# Skip RStudio temp files
+.Rhistory
+# Prevent RStudio Data
+.RData

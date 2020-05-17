@@ -1,0 +1,881 @@
+---
+title: 'New York Short Term Rental Analysis : Airbnb & Zillow'
+author: "Somil Saxena"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    df_print: paged
+---
+```{r setup, fig.width=10,echo=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# {.tabset .tabset-fade}
+
+## Case Overview
+
+### Problem Statement
+
+A real estate company that has a niche in purchasing properties to rent out short-term as part of their business model specifically within New York City is requiring consulting for the problem.  The real estate company has already concluded that two bedroom properties are the most profitable; however, they do not know which zip codes are the best to invest in.    
+
+The real estate company requires a data product  to help them understand which zip codes would generate the most profit on short term rentals within New York City.
+
+### Data
+
+The dataset is available as two separate files:
+
+* **Zip_Zhvi_2bedroom.csv**    
+It contains information about the median house price of a two-bedroom property between the years 1996 and 2019 computed every month.This data is available for different zip codes in the United States. Data is sourced from Zillow.
+
+* **listings.csv**   
+It provides information about different rental properties in New York. Data is sourced from AirBnb.
+
+### Assumptions
+
+*	The investor will pay for the property in cash (i.e. no mortgage/interest rate will need to be accounted for).
+*	The time value of money discount rate is 0% (i.e. $1 today is worth the same 100 years from now).
+*	All properties and all square feet within each locale can be assumed to be homogeneous (i.e. a 1000 square foot property in a locale such as Bronx or Manhattan generates twice the revenue and costs twice as much as any other 500 square foot property within that same locale.)
+* The company will put properties on rent throughout the year every day and out of which 75% of the year they will be rented since the occupancy rate is assumed to be 75%
+
+## Packages and Parameter Setup 
+
+### Packages
+
+* **data.table** - Provides faster file reads and writes
+
+* **dplyr** - It provides verbs that help in data manipulation of objects like a data-frame
+
+* **forecast** - Provides forecasting methods
+
+* **ggplot2** - Provides various methods to draw nicer graphics
+
+* **R.utils** - Allows reading gz files directly
+
+* **tibble** - For nicer and more convenient data frames
+
+* **tidyverse** -  It is a collection of open-source R packages. It provides various methods to tidy up the data 
+
+* **tseries**   - It is a package for time series analysis 
+
+* **mice**      - Provides the functionality of Multivariate Imputation by Chained Equations. It is used for data imputation
+
+* **zoo** - For parsing of dates
+
+* **gridExtra** - Allows arranging multiples grid-based plots
+
+```{r packages,results='hide',warning=FALSE}
+#Installing and loading the required packages.
+packages <- c(
+  "data.table",  
+  "dplyr",       
+  "forecast",    
+  "ggplot2",     
+  "R.utils",     
+  "tibble",      
+  "tidyverse",   
+  "tseries",     
+  "mice",        
+  "zoo",         
+  "grid",        
+  "gridExtra"   
+)
+
+for (pkg in packages) {
+  if (!(pkg %in% installed.packages()[, "Package"])) {
+    install.packages(pkg)
+  }
+}
+
+library(zoo)
+library(dplyr)
+library(R.utils)
+library(tibble)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(tseries)
+library(forecast)
+library(mice)
+library(grid)
+library(gridExtra)
+```
+
+### Parameter Setup
+
+This product will work with two input parameters to maintain flexibility.
+They are as follows:   
+
+Variable Name | Description
+------------- | -----------
+city_of_interest | It will store the city of interest
+bedroom_count | It will store the number of bedrooms in a property
+
+If a new requirement arises, these variables can be modified ie. a new city or a new number of bedrooms count can be selected.
+
+**Note**   
+*The current zillow data file has information on a 2 bedroom apartment. If the bedroom count is changed from 2 to anything else, then the corresponding Zillow file should also be changed. Similarly, the airbnb data file also needs to be changed for a new city.* 
+
+For the current analysis, variables are initialized with values specific to the problem statement:
+
+*city_of_interest = "New York"    
+bedroom_count = 2*
+
+```{r parameters}
+#Set the desired city of interest
+city_of_interest = "New York"
+#Set the desired bedroom count for the listing
+bedroom_count = 2
+```
+## Data Description
+
+Data is imported from online Airbnb and Zillow repository.
+
+```{r import_data, results='hide'}
+complete_listings = fread("http://data.insideairbnb.com/united-states/ny/new-york-city/2019-07-08/data/listings.csv.gz",na.strings = c("","NA"))
+complete_zillow = fread("http://files.zillowstatic.com/research/public/Zip/Zip_Zhvi_2bedroom.csv",na.strings = c("","NA"))
+listings = as_tibble(complete_listings) #Parsing into tibble for better data viewing
+zillow_hv_2bdr = as_tibble(complete_zillow)
+```
+
+**Names**    
+The dataset present in:          
+* listings.csv.gz will be addressed as **airbnb** dataset            
+* Zip_Zhvi_2bedroom.csv will be addressed as **zillow** dataset                
+
+*These names will be frequently used in this report*
+
+Before diving deep into the data, we begin by having a glimpse of the data
+
+#### Zillow Data
+
+The zillow dataset contains `r nrow(complete_zillow)` observations and `r ncol(complete_zillow)` variables.
+
+Head of zillow dataset     
+
+```{r zillow_head,echo=FALSE}
+head(zillow_hv_2bdr)
+```
+
+#### Airbnb Data
+
+The airbnb dataset contains `r nrow(complete_listings)` observations and `r ncol(complete_listings)` variables.
+
+Head of airbnb dataset    
+
+```{r airbnb_head,echo=FALSE}
+head(listings)
+```
+
+## Data Munging {.tabset .tabset-fade .tabset-pills}
+
+### Data Quality Check {.tabset .tabset-fade .tabset-pills}
+
+#### Airbnb Data
+
+**Steps performed in Airbnb Data Quality Check**
+
+* Data is validated for Tidy Data Principles which are:
+  + Each observation should have a separate row         
+  + Each variable should have a separate column             
+  + Each value must have its cell     
+  Tidy data take advantage of R's vectorized operations which assists data analysis.   
+  **Result** -> Airbnb follows tidy data principles hence no change needed.
+* Relevant data is extracted       
+  **Result** ->Following variables are selected: *city,*
+  *zipcode, latitude, longitude, bedrooms, neighbourhood_group_cleansed, property_type, square_feet, price, weekly_price, monthly_price*
+* Datatypes are checked and converted into the correct format.       
+  **Result** -> $ symbol and comma is removed from price related variables. 
+* Data is checked for duplicate records.       
+  **Result** ->1 duplicate record is found and removed.  
+* Data is checked for missing data and accordingly imputed.    
+  **Result** ->Missing data in zipcode is imputed.
+* Data is checked for abnormality and accordingly imputed.    
+  **Result** ->Properties with nightly price equal to 0 are correctly imputed
+
+***
+##### **Tidy Data Check**
+
+Airbnb data is not violating tidy data principles hence no transformation needed.
+
+##### **Selecting Relevant Data**
+
+There are `r ncol(complete_listings)` variables present in the listings tibble, out of which 11 variables are selected keeping the problem statement in mind. 
+
+*Note:*         
+*Variables are selected keeping the fact that the analysis is required at zipcode level. If the problem statement required analysis at property level, then additional variables would have been considered.*
+
+Herein we have filtered the columns but not the rows as complete data is required for imputing missing values. For missing data imputation, the larger the dataset the better.
+
+```{r select_variables}
+#Select required columns
+required_cols = c("city","zipcode","latitude","longitude","bedrooms","neighbourhood_group_cleansed","property_type","square_feet","price", "weekly_price","monthly_price")
+complete_listings = listings
+listings = listings %>% select(required_cols)
+```
+##### **Data Format Check **
+
+Datatypes are checked and converted into the correct format.
+eg. variables relating to price are using the USD notation which is not useful for analysis, thus they are converted into numeric.
+
+Additionally, zipcode and bedrooms are converted into factors.
+```{r remove_dollar,warning=FALSE}
+#remove dollar symbol from price
+listings = cbind(
+  listings %>%
+  select(-c(price,weekly_price,monthly_price)),
+  listings %>%
+  select(price,weekly_price,monthly_price) %>%
+  sapply(function(x) as.numeric(gsub("[$,]","",x))))
+
+listings = mutate(listings, zipcode = na_if(zipcode,""))
+listings = mutate(listings, bedrooms = na_if(bedrooms,""))
+listings$zipcode = as.factor(listings$zipcode)
+listings$bedrooms = as.factor(listings$bedrooms)
+```
+##### **Duplicate Data Check**
+
+One duplicate record was found in the dataset and removed.
+```{r}
+listings[which(duplicated(listings)),] 
+listings = listings[which(!duplicated(listings)),]
+```
+##### **Missing Data Check **
+
+Examining the entire dataset for missing values.
+Records of variables having less than 0.1 percent missing values are removed.    
+```{r missing_data, fig.height=4, fig.width=9}
+#Function to calculate percentage of missing values in a variable
+percent_missing = function(x,obs_count){
+  (sum(is.na(x))/obs_count)*100
+}
+
+#Function to compute missing values in a data frame
+compute_missing_df =  function(df,precision=2){
+  missing_vector = sapply(df,percent_missing,nrow(df))
+  missing_vector = round(missing_vector,precision)
+  miss.df <- data.frame(Variable = names(missing_vector), 
+                  Percent_missing = unname(missing_vector))
+  return (miss.df)
+}
+
+#Function to compute and plot missing value percentages in a data frame
+compute_and_plot_missing = function(df,precision=2){
+  ggplot(compute_missing_df(df,precision), aes(x=Variable, y = Percent_missing,fill="#0073C2FF")) +
+          geom_bar(stat="identity",width=0.6) +
+          labs(
+          y = 'Percentage',
+          title = "Missing Value Percentage")+
+          geom_bar(stat="identity") +
+          scale_y_continuous(breaks=seq(0,100,10)) +
+          geom_text(
+          aes(label = Percent_missing),
+              hjust = -0.1, size = 3) +
+          theme_classic() + 
+          coord_flip()+
+          theme(
+              axis.ticks.x=element_blank(),
+              axis.text.x=element_blank(),
+              axis.title.x=element_blank(),
+              axis.title.y =element_blank(),
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 18, face = 'bold'),
+              legend.position = 'none',
+              axis.title = element_text(face = 'bold'))
+}
+
+#Compute missing values
+compute_and_plot_missing(listings,precision=2)
+#Drop records for variables with less than 0.1 missing values
+low_miss_count = filter(compute_missing_df(listings),Percent_missing < 0.1 & Percent_missing > 0)
+listings = listings %>% drop_na(as.character(low_miss_count$Variable))
+```
+Since the percentage of missing zip codes is very small ie.less than 2 , it can be imputed. Since Longitude and Latitude are best predictors for zip codes we will use them to impute zip codes.
+
+From the Missing Values Percentage plot, it is known that price has no missing values while square_feet,weekly_price,monthly_price have more than 85% missing values.Thus, only price can be used to compute the annual_revenue of the listing. This carries on to the assumption that the rent is uniform across all periods ie. the weekly rent will be 7 times the daily rent and so on. But in real business scenarios, rent price for different periods vary, generally a discount is offered as the duration of stay increases. 
+
+As nothing useful can be derived from monthly_price,weekly_price,square_feet due to a large number of missing values, therefore, they are dropped.
+
+```{r impute_missing_data}
+#Check the missing percentage of zipcode
+zip_missing = percent_missing(listings$zipcode,nrow(listings))
+if (zip_missing < 2 & zip_missing > 0.1) {
+  #Filter out the dataset for imputing
+  zip_long_lat_df = listings %>% select(zipcode,longitude,latitude)
+  #Classification and Regression Tree (CART) Method is used
+  imputedData <- mice(zip_long_lat_df, m=5, method='cart', printFlag=FALSE)
+  #Merging imputed data with remaining data
+  full_dataset = complete(imputedData)
+  listings_subset <- listings %>% select(-c(zipcode,longitude,latitude))
+  listings <- cbind(full_dataset,listings_subset)
+} #Mice Imputation can sometimes take 2-3 minutes.
+
+listings = listings %>%
+  select(-c("weekly_price","monthly_price","square_feet"))
+```
+##### **Abnormal Data Check **
+
+Certain properties have a nightly price equal to zero.
+These can be imputed with either mean or median of price. Since the price can vary with respect to the number of bedrooms in the property, so the price per bedroom count will be plotted.
+
+```{r price_plot,fig.height=4, fig.width=9}
+ggplot(listings, aes(x=bedrooms, y=price,fill="#0073C2FF")) +
+  geom_boxplot() +
+  theme_classic() + 
+  labs(x = 'Number of Bedrooms',
+              y = 'Rent per night',
+              title = "Distribution of Nightly Rent across different number of bedrooms")+
+      theme(
+          text = element_text(color = '#444444'),
+          plot.title = element_text(size = 14, face = 'bold'),
+          legend.position = 'none',
+          axis.title = element_text(face = 'bold'))
+```      
+The above plot shows that price distribution is skewed for almost all bedroom counts therefore using mean is not a good option, the median is the better option for imputation.
+
+Ideally, the median price per zipcode will provide a better estimate of the nightly price in that particular zipcode. So we impute abnormal price by the median price within the zipcode.
+
+```{r compute_median_per_zip}
+#calculate median price per zip
+median_price_per_zip = listings %>%
+  group_by(zipcode) %>%
+  summarise(median_price = median(price,na.rm=TRUE))
+
+listings_zero_price = filter(listings, price==0)
+listings_non_zero_price = filter(listings,!(price==0))
+
+#fill missing values with median of that zip
+filled_zero_prices = median_price_per_zip %>%
+  right_join(listings_zero_price,by=c("zipcode"="zipcode")) %>%
+  mutate(price=median_price) %>%
+  select(-median_price)
+
+listings = rbind(listings_non_zero_price,filled_zero_prices)
+```
+
+#### Zillow Data
+
+**Steps performed in Zillow Data Quality Check**
+
+* Data is validated for Tidy Data Principles        
+  **Result** -> Zillow violates the above principles therefore it is transformed accordingly.    
+* Relevant data is extracted       
+  **Result** ->Following variables were selected: *RegionName, City, HV_median, Date(newly created column)*
+* Data is checked for duplicate records            
+  **Result** ->No duplicate records are found in the zillow data.                  
+* Data is checked for missing values    
+  **Result** ->Zillow data does not contain missing values
+
+***
+##### **Tidy Data Check**
+
+Since the zillow data is not following the principles of tidy data, it is transformed accordingly. The year-month variables will be converted into tall data comprising of the Date column.
+
+**Date** is a Date type variable with the day of the month = 01 along with respective month and year.
+```{r zillow_to_tidy}
+#Convert zillow data into tidy data
+zillow_hv_2bdr = zillow_hv_2bdr %>% 
+  gather(year_mon, HV_median,-c('RegionID','RegionName','City','State','Metro','CountyName','SizeRank')) %>%
+  separate(year_mon, sep="-", into = c("Year", "Month")) %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep="-"), "%Y-%m-%d")) %>%
+  select(-c(Year,Month))
+new_zillow_dim = dim(zillow_hv_2bdr) 
+```
+Post-conversion the zillow dataset contains `r new_zillow_dim[1]` observations and `r new_zillow_dim[2]` variables.
+
+##### **Selecting Relevant Data**
+
+Extracted last two years zillow data which will be used later in data analysis.
+```{r filter_2_years, warning=FALSE}
+#Extract last two years data(ie. last 24 months, infact 25 months in order to complete two cycles)
+last_two_years = zillow_hv_2bdr %>%
+  distinct(Date) %>%
+  arrange(desc(Date)) %>%
+  top_n(25,Date)
+zillow_hv_2bdr = zillow_hv_2bdr %>% 
+  filter(Date %in% last_two_years$Date) %>%
+  select(-c(RegionID,Metro,CountyName,State,SizeRank))
+```
+##### **Data Format Check **
+
+Datatypes are checked and converted into the correct format.
+RegionName is essentially the zipcode, so it should be renamed. Additionally, it should be converted to a factor.
+
+```{r datatype_check}
+zillow_hv_2bdr = zillow_hv_2bdr %>% rename(Zipcode = RegionName)
+#Convert into factors
+zillow_hv_2bdr$Zipcode = as.factor(zillow_hv_2bdr$Zipcode)
+```
+##### **Duplicate Data Check**
+
+No duplicated rows were found in the dataset.
+
+```{r duplicate_check}
+zillow_hv_2bdr[which(duplicated(zillow_hv_2bdr) ==T),] 
+```
+##### **Missing Data Check **
+
+Data does not have any missing values.
+
+```{r missing_check}
+compute_missing_df(zillow_hv_2bdr,precision=2)
+```
+### Data Filtering and Cleaning 
+
+**Steps performed in Data Filtering and Cleaning**
+
+* Data is filtered for the desired city and bedroom count.        
+  **Result** -> Data is filtered for New York City and 2 bedroom properties 
+* Cleaning incorrect data       
+  **Result** ->Zipcodes 10013,10463,11385 were assigned to more than one New York city neighbourhood_group/borough.Neighbourhood_group of these zip codes were corrected.
+* Cleaning extreme values            
+  **Result** ->Outliers such as $10,000 as the nightly price for a 2 bedroom property were appropriately capped.               
+
+***
+##### **Data Filtering**
+
+The real estate company has already concluded that two bedroom properties are the most profitable therefore we will filter the data for two bedroom properties and `r city_of_interest` city zip codes.
+
+```{r data_filter}
+#Filter zillow data for the required city
+zillow_hv_2bdr = zillow_hv_2bdr %>%
+  filter(City == city_of_interest)
+zillow_hv_2bdr$HV_median = as.numeric(zillow_hv_2bdr$HV_median)
+
+#select unique zip codes for the required city from zillow
+zips_from_zillow = zillow_hv_2bdr %>%
+  select(Zipcode) %>% 
+  distinct(Zipcode)
+
+#select those zip codes from listings which are present in zillow data for given bedroom_count
+listings = listings %>%
+  filter(zipcode %in% zips_from_zillow$Zipcode, bedrooms == bedroom_count)
+```
+
+##### **Cleaning incorrect data**
+
+neighbourhood_group_cleansed basically denotes the county-level administrative divisions called boroughs.
+New York City has five boroughs.Few zip codes were assigned to more than one New York City borough.
+
+```{r clean_incorrect_data}
+#zip codes assigned to multiple neighbourhood_group_cleansed
+incorrect_mapping = listings %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(total_listings=n()) %>% mutate(entries = n()) %>% filter(entries > 1)
+
+#Certain zip codes where assigned wrong neighbourhood_group, this is fixed via assigning that neighbourhood_group to zipcode which has maximum listings.
+cor_zip_neigh = incorrect_mapping %>% group_by(zipcode) %>% filter(total_listings == max(total_listings)) %>% select(zipcode,neighbourhood_group_cleansed)
+cor_zip_neigh$zipcode = as.character(cor_zip_neigh$zipcode)
+
+#Fixing : Each zipcode should be assigned to only one neighbourhood_group_cleansed
+assign_correct_group = function(x,df,cor_df){
+  for(i in x) {
+    zip = cor_df$zipcode[i]
+    index = df$zipcode == zip
+    df[index,"neighbourhood_group_cleansed"] = cor_df$neighbourhood_group_cleansed[i]
+  }
+  return(df)
+}
+
+listings = assign_correct_group(1:nrow(cor_zip_neigh),listings,cor_zip_neigh)
+incorrect_mapping
+```
+**`r cor_zip_neigh$zipcode`** were assigned to more than one neighbourhood_group and hence their neighbourhood_group were corrected.
+
+##### **Cleaning extreme values**
+```{r clean_extreme_values,fig.height=4,fig.width=11, warning=FALSE}
+price_bp = ggplot(listings, aes(x=neighbourhood_group_cleansed, y=price,fill="#0073C2FF"))+
+  geom_boxplot() +
+  theme_classic() + 
+  labs(x = 'Neighbourhood_group',
+              y = 'Rent per night',
+              title = "Rent per night distribution")+
+      theme(
+          text = element_text(color = '#444444'),
+          plot.title = element_text(size = 16, face = 'bold'),
+          legend.position = 'none',
+          axis.title = element_text(face = 'bold'))
+
+price_percentile = ggplot(listings, aes(price)) + stat_ecdf(geom = "point")+
+  scale_y_continuous(breaks=seq(0,1,0.05)) + 
+  geom_hline(yintercept = 0.95,color = "red") +
+  theme_classic() + 
+  labs(x = 'Rent Per Night',
+       y = 'Percentiles',
+       title = "Percentile distribution of Rent per night")+
+       theme(
+          text = element_text(color = '#444444'),
+          plot.title = element_text(size = 16, face = 'bold'),
+          legend.position = 'none',
+          axis.title = element_text(face = 'bold'))
+
+grid.arrange(price_bp,price_percentile,nrow=1, ncol=2,top=textGrob(paste("Distribution of Nightly Rent for ", bedroom_count," bedroom"), gp=gpar(fontsize=20,font=8)))
+
+#3 times the Inter-quartile range is termed as the extreme value
+extreme_value<- 3 * IQR(listings$price)
+if(sum(listings$price > extreme_value)>0){
+  #Remove outliers from price
+  price = listings$price
+  price_quantile <- quantile(price, probs=c(.25, .75))
+  #It appears values above 0.95 percentile are the outliers, hence those values can be capped with 0.95 values and similarly at 0.05 for lower bound.
+  caps <- quantile(price, probs=c(.05, .95))
+  #Since this is the case for extreme outliers, 3 times the IQR is used
+  price[price < (price_quantile[1] - extreme_value)] <- caps[1]
+  price[price > (price_quantile[2] + extreme_value)] <- caps[2]
+  listings$price = price
+}
+```
+
+Price per night is skewed for almost all the neighbourbood groups. Manhattan has some very expensive properties eg. A 2 bedroom property in Manhattan has $10,000 as the nightly rent. Outliers or properties with extreme values in price are removed by appropriate capping as per the percentile distribution plot. It appears values above 0.95 percentile are the outliers, hence those values are capped with 0.95 value.
+
+## Data Analysis {.tabset .tabset-fade .tabset-pills}
+
+### Rent per night Analysis
+
+```{r rent_analysis,fig.height=4,fig.width=11, warning=FALSE}
+price_density = ggplot(listings,aes(x=price, fill=neighbourhood_group_cleansed)) +
+  geom_density(alpha = 0.3) + 
+  scale_x_continuous(limits = quantile(listings$price, c(0, 0.99))) + 
+  labs(x = "Rent per night", y = "Density",title = "Price density across different neighbourhood") + 
+  guides(fill = guide_legend(title = "Neighbourhood_group")) +
+  theme_classic()+
+  theme(
+          text = element_text(color = '#444444'),
+          plot.title = element_text(size = 16, face = 'bold'),
+          legend.position = 'bottom',
+          legend.title = element_blank(),
+          axis.title = element_text(face = 'bold'))
+
+listings_by_neigh_group = listings %>%
+  group_by(neighbourhood_group_cleansed) %>%
+  summarize(total_listings=n())%>%
+  ggplot(aes(x = neighbourhood_group_cleansed,y = total_listings, fill="#0073C2FF")) +
+  geom_bar(stat="identity", width = 0.4) +
+         labs(x = 'Neighbourhood_group',
+              y = 'Number of Properties',
+              title = "Number of properties by neighbourhood")+
+         geom_text(
+              aes(label = total_listings),
+              vjust = -0.3, size = 3.8) +
+         theme_classic() + 
+         theme(axis.ticks.y=element_blank(),
+              axis.text.y=element_blank(),
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 16, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'none',
+              )
+
+grid.arrange(price_density,listings_by_neigh_group,nrow=1, ncol=2,top=textGrob(paste("Neighbourhood-wise price distribution and property count"), gp=gpar(fontsize=20,font=8)))
+```
+
+The density plot for rent per night on the left reveals that Manhattan has a wider spread with price ranging from $50 to $600 per night. Brooklyn shows a normal distribution which is a bell-shaped curve that is close to real-world standard distribution. Queens and Staten have narrower distribution in price.The plot on the right shows that Manhattan and Brooklyn host the highest number of properties followed by Queens, Bronx, and Staten Island.
+
+```{r rent_by_type,fig.height=4,fig.width=12, warning=FALSE}
+
+price_dist_by_prop_type = listings %>%
+         ggplot(aes(x = price,y = property_type,color="#0073C2FF")) +      
+         geom_point(alpha=0.3) +
+         labs(x = 'Rent per night',
+              y = 'Property Type',
+              title = "Distribution of Nightly rent")+
+         theme_classic() + 
+         theme(
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 16, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'none',
+              )
+prop_type_by_property_count=  listings %>%
+  group_by(property_type) %>%
+  summarize(total_listings=n())%>%
+  ggplot(aes(x = property_type,y = total_listings, fill="#0073C2FF")) +
+  geom_bar(stat="identity", width = 0.4) +
+         labs(x = 'Property Type',
+              y = 'Number of Properties',
+              title = "Number of properties per type")+
+         geom_text(
+              aes(label = total_listings),
+              hjust = -0.1, size = 2.6) +
+         theme_classic() + 
+         coord_flip()+
+         theme(axis.ticks.y=element_blank(),
+              axis.text.y=element_blank(), 
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 16, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'none',
+              )
+
+grid.arrange(price_dist_by_prop_type,prop_type_by_property_count,nrow=1, ncol=2,top=textGrob(paste("Property type-wise price distribution and property count"), gp=gpar(fontsize=20,font=8)))
+```
+
+Rent per night is measured across different property types: Apartment, House, Loft, etc. There seems to be no clear pattern to claim a certain property type out prices another. The plot on the right shows that Apartment is the most common type of rental property and price varies roughly between 15 to 600 dollars.
+
+### Methodology
+
+A metric called **Price to Rent Ratio** will be used for identifying the zip codes which would be most profitable for the real estate company.
+
+#### **Price to Rent Ratio**
+
+*Price to rent ratio is a real estate metric that measures the relative affordability of buying or renting a real estate property in a given real estate market. A real estate investor uses this ratio as a guide to finding the best places to invest in a rental property. It can be calculated as follows:*
+
+$$Price-to-Rent-Ratio = Median Home Price / Median Annual Rent$$
+
+Median Home Price is already stored in the HV_median variable while Median Annual Rent needs to be calculated which will be stored in the median_annual_rent variable.Once both median_annual_rent and HV_median are calculated, then data needs to be merged.
+
+A lower price-to-rent ratio generally indicates a better investment from a cash flow perspective. 
+
+#### **Terminology**
+
+* **occupancy_rate** - The period for which the property will be rented in a year.It is assumed to 0.75.     
+* **listings_agg** - It represents a subset of airbnb data grouped by zipcode and with a new column named median_annual_rent. 
+* **median_annual_rent** - The rent of the listing computed annually by taking the median per zipcode and then multiplying by 365. 
+* **total_listings** - It represents the total number of listings/properties per zipcode
+* **price_to_rent_ratio** - It is the ratio of Median Home Value / Median Annual Rent
+* **zipwise_data** - It represents combination of airbnb and zillow data.They are joined on common zip codes.
+* **z_up_till_last_month** - It represents the zillow data having Median House Value data for last month.     
+* **z_ahead_by_12_months** - It represents the zillow data having Median House Value data ahead by 12 months.
+* **payback_period** - It represents the amount of time it will take to recover the cost of investment in a zipcode. Its unit is month.   
+* **tp_ym** - It represents the payback period in year month format.
+
+### Implementation and Recommendations
+
+**Steps performed in Data Analysis Implementation**
+
+* Computing Median Annual Rent and Price-to-rent-Ratio for each zipcode        
+  **Result** -> Median Annual Rent is computed using 75% occupancy assumption. Price-to-rent Ratio is computed by dividng Median House Price by Median Annual Rent after joining both the datasets.Its distribution across various neighbourhood is examined.    
+* Identifying profitable zip codes for different time frames and computing their Payback Period    
+  **Result** ->Top 5 zip codes are identified for different time frames. Additionally,Payback Period provides an estimate about the time interval in which the property will payback.
+  
+This is followed by **Recommendations** about the top 5 most profitable zip codes.
+
+***
+##### **Computing Median Annual Rent and Price-to-Rent ratio**    
+
+For calculationg Median Annual Rent , first of all the median daily price,ie. the rent per night for each zipcode is calculated and then converted for the entire year. It is computed keeping the following assumption:     
+
+**Assumption**     
+*Occupancy rate is 75%.Thus, the annual median rent needs to be multiplied with 0.75.*
+
+Price to rent ratio is computed after merging airbnb and zillow data.
+```{r compute_pr,fig.height=4,fig.width=10, warning=FALSE}
+#Compute Median Annual Rent for each zipcode and also the total number of properties in each zipcode
+occupancy_rate = 0.75
+listings_agg = listings %>%
+  group_by(zipcode) %>%
+  summarize(median_annual_rent = median(price) * 365 * occupancy_rate, total_listings=n())
+
+#Associating appropriate neighbourhood_group to correct zipcode
+listings_agg = listings %>% group_by(zipcode,neighbourhood_group_cleansed) %>% summarize(total_listings=n()) %>% select(-c(total_listings)) %>%
+merge(listings_agg,by = c("zipcode"))
+
+#Dropping unused levels from factors
+zillow_hv_2bdr$Zipcode = droplevels(as.factor(zillow_hv_2bdr$Zipcode))
+listings_agg$zipcode = droplevels(listings_agg$zipcode)
+
+#Joining both the datasets by zip codes
+zipwise_data = listings_agg %>%
+  inner_join(zillow_hv_2bdr, by= c("zipcode"="Zipcode"))
+
+#Since both median_annual_rent and HV_median(Median House Price) , lets merge the listings and zillow data by zip codes and calculate the price_to_rent_ratio.
+
+zipwise_data = zipwise_data %>%
+  mutate(price_to_rent_ratio = HV_median/median_annual_rent)
+
+#Selecting the recent month to compute more accurate price-to-rent ratio
+last_month = zipwise_data %>% distinct(Date) %>%
+  arrange(desc(Date)) %>% head(1)
+z_up_till_last_month = zipwise_data %>% filter(Date %in% last_month$Date)
+
+z_up_till_last_month %>%
+         ggplot(aes(x = neighbourhood_group_cleansed,y = round(price_to_rent_ratio,2),color=neighbourhood_group_cleansed)) +
+         geom_jitter(alpha=0.8,size=3) +
+         labs(x = 'Neighbourhood_group',
+              y = 'price_to_rent_ratio',
+              title = "Distribution of Price-to-rent ratio across neighbourhood_groups")+
+         theme_classic() +
+         theme(
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 18, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = "bottom",
+              legend.title = element_blank()
+              )
+```
+It can be seen that zip codes with highest price-to-rent ratios with values around 30 are present in Manhattan while the zip codes with lowest price-to-rent ratios with values around 2 are present in Bronx.This plot also gives a fare amount of description about the number of zip codes present in each neighbourhood. Manhattan and Queens have quite a good number of zip codes under them, while Staten Island has the least number of zip codes.
+
+##### **Identifying profitable zip codes for different time frames and computing their payback period**
+
+Zipcodes with less than 10 listings won't be a good representation of true population.Thus the data is filtered for zip codes which have atleast 10 or more listings and then the top 5 zip codes with least price-to-rent ratio are identified.Since a lower price-to-rent ratio indicates a better investment from a cash flow perspective, these 5 zip codes would be most profitable. 
+
+Keeping the real world business scenario in mind, the top 5 zip codes having least price-to-rent ratio is suggested for two different time frames:      
+1. If the real-estate company is looking for immediate investment           
+2. If the real-estate company will invest after 12 months(next year)                       
+
+The dataset for first case was computed via filtering and for the second case HV_median was forecasted.Then the respective Price-to-rent ratios payback_period were calculated
+
+*Note:*          
+*Payback Period refers to the amount of time it takes to recover the cost of an investment. The desire to invest in a certain property is directly related to its payback period. Shorter paybacks mean more attractive investments.*     
+```{r forecast_payback_period,warning=FALSE}
+#To ease this, we create two datasets, one for each case.
+
+#Filter data for zip codes having total_listings greater than 10
+zipwise_data = zipwise_data %>% filter(total_listings >= 10)
+
+#Dataset 1 : Zipwise data till last month for all zip codes
+z_up_till_last_month = zipwise_data %>% filter(Date %in% last_month$Date)
+
+#Forecasting HV_median for the second scenario
+
+#Forecasted HV_median after 12 months
+HV_median_after_12_months=c()
+
+#Forecasting 
+for (zip in z_up_till_last_month$zipcode){
+    filtered_data = zipwise_data %>% filter(zipcode==zip) 
+    zip_ts = ts(filtered_data$HV_median,frequency=12, 
+    start = as.yearmon(last_two_years$Date[25]))
+    model_fit = auto.arima(zip_ts)
+    hv_forecast = forecast(model_fit, h = 12)
+    HV_median_after_12_months = append(HV_median_after_12_months,hv_forecast$mean[12])
+}
+
+#Function to compute Price-to-rent-ratio for forecasted values
+compute_price_to_rent_ratio = function(source_df,hv_median){
+  dest_df = cbind(source_df,hv_median)
+  dest_df %>%
+  select(-c(HV_median,price_to_rent_ratio)) %>%
+  mutate(price_to_rent_ratio = hv_median/median_annual_rent) %>%
+  rename(HV_median = hv_median)
+}
+
+#Dataset 2 : Zipwise data with forecasted value of current month
+z_ahead_by_12_months = compute_price_to_rent_ratio(z_up_till_last_month,HV_median_after_12_months)
+
+#Sorting and filtering the data to find out the top 5 zip codes
+z_up_till_last_month = z_up_till_last_month %>% arrange(price_to_rent_ratio) %>% head(5)
+z_ahead_by_12_months = z_ahead_by_12_months %>% arrange(price_to_rent_ratio)%>% head(5)
+
+#Compute Payback Period
+z_up_till_last_month = z_up_till_last_month %>%
+  mutate(payback_period = ceiling(price_to_rent_ratio*12)) %>% 
+  mutate(tp_ym = paste(floor(payback_period/12),'y ',payback_period%%12,'m'))
+
+z_ahead_by_12_months = z_ahead_by_12_months %>%
+  mutate(payback_period = ceiling(price_to_rent_ratio*12)) %>% 
+  mutate(tp_ym = paste(floor(payback_period/12),'y ',payback_period%%12,'m'))
+
+#Function to plot payback_period
+plot_PaybackPeriod_vs_Zip = function(df){
+  df %>% 
+         ggplot(aes(x = zipcode,y = payback_period)) +      
+         geom_bar(stat="identity", width = 0.4,aes(fill=neighbourhood_group_cleansed)) +
+         labs(x = 'Zipcode',
+              y = 'Payback Period')+
+         coord_flip() +
+         geom_text(
+              aes(label =  tp_ym),
+              hjust = 1.1, size = 4) +
+         theme_classic() +
+         theme(axis.ticks.y=element_blank(),
+               axis.ticks.x=element_blank(),
+               axis.text.x =element_blank(),
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 15, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'none')
+}
+
+#Functions to plot Price-to-rent-ratio, HV_median for all the scenarios
+
+#Function to plot Price-to-rent ratio vs Zipcode
+plot_PR_ratio_vs_zipcode = function(df){
+  df %>% 
+         ggplot(aes(x = zipcode,y = round(price_to_rent_ratio,2))) +      
+         geom_bar(stat="identity", aes(fill=neighbourhood_group_cleansed),width = 0.4) +
+         labs(x = 'Zipcode',
+              y = 'Price to Rent Ratio')+
+         geom_text(
+              aes(label = round(price_to_rent_ratio,2)),
+              vjust = -0.3, size = 3.8) +
+         theme_classic() + 
+         theme(axis.ticks.y=element_blank(),
+              axis.text.y=element_blank(),
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 15, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'none'
+              )
+}
+
+#Function to plot HV_median vs Zipcode
+plot_HV_median_vs_zipcode = function(df){
+  df %>% 
+        ggplot(aes(x = zipcode,y =  round(HV_median,2),group=1)) +      
+        geom_line()+
+        geom_point(aes(color=neighbourhood_group_cleansed),size=5)+
+        labs(x = 'Zipcode',
+             y = 'Median Price of a House')+
+         theme_classic() +
+         theme(axis.ticks.y=element_blank(),
+              axis.title.x=element_blank(),
+              text = element_text(color = '#444444'),
+              plot.title = element_text(size = 15, face = 'bold'),
+              axis.title = element_text(face = 'bold'),
+              legend.position = 'bottom',
+              legend.title = element_blank())
+}
+```
+##### **Recommendations**
+
+The problem statement required to identify the zip codes would be most profitable on short term rentals within New York City. I decided to display top 5 zip codes with least price-to-rent ratios considering the following two cases:    
+
+**1.Immediate Investment**
+
+```{r recomm1,fig.height=4,fig.width=12.5}
+grid.arrange(plot_PR_ratio_vs_zipcode(z_up_till_last_month),
+             plot_HV_median_vs_zipcode(z_up_till_last_month),
+             plot_PaybackPeriod_vs_Zip(z_up_till_last_month),
+             nrow=1, ncol=3,top=textGrob("Immediate Investment", gp=gpar(fontsize=20,font=8)))
+```
+In this case, the company has already allocated the budget and they are looking for immediate acquision. For this scenario, the top 5 zip codes are:     
+**`r z_up_till_last_month$zipcode`**             
+Examining the median house price of the zip codes also points the fact that investing in the zipcode belonging to Manhattan will be the largest with value close to $1250000 while investing in the zipcode belonging to Queens will be the smallest with value around 350000 dollars. This allows the real estate company to select zipcode which is within their budget.   
+Also, by examining the payback period the real-estate firm can select the zipcode with the shortest payback period. It can also help the firm in setting up their future goals as per the payback period.
+
+**2.Investment is done after twelve months**
+
+```{r recomm2,fig.height=4,fig.width=12.5}
+grid.arrange(plot_PR_ratio_vs_zipcode(z_ahead_by_12_months),
+             plot_HV_median_vs_zipcode(z_ahead_by_12_months),
+             plot_PaybackPeriod_vs_Zip(z_ahead_by_12_months),
+             nrow=1, ncol=3,top=textGrob("Invested after twelve months", gp=gpar(fontsize=20,font=8)))
+```  
+
+In this case, the company is planning to invest in future, probably 12 months later.For this scenario, the top 5 zip codes are :                  
+**`r z_ahead_by_12_months$zipcode`**        
+A zipcode from Bronx, **10451**, entered the top 5 while zip codes in Manhattan and Queens remains the same.This zipcode from Bronx has the largest payback period and therefore the last choice among the top 5, if time is deciding factor. If cost is the deciding factor, then zip codes in Queens forms the best choices.     
+
+## Executive Summary
+
+### Summary
+
+Having the problem statement in mind, the report began by understanding the problem statement, what are its business implications and how the solution provided by this product can be used by the real-estate company. Next, the data was acquired from the online resource. This was followed by setting city parameter to New York and the number of bedrooms equal to 2.Then began the task of data preparation which included data exploration and data cleaning. After this, key variables were analyzed and the Price-to-rent ratio metric was derived which helped in quantifying the results.
+
+The results can be summarized as follows:         
+
+1. If the company has already decided on the budget and looking for immediate acquisition. Then the top 5 zip codes based on least price-to-rent ratios where the real-estate firm can buy properties and expect profits are:    
+**`r z_up_till_last_month$zipcode`**
+
+2. If the company has not yet decided and planning to invest next year. For this scenario, the top 5 zip codes based on least price-to-rent ratios, are:     
+**`r z_ahead_by_12_months$zipcode`**   
+
+### Future Steps     
+
+* The occupancy rate is assumed to be 75%. Various variables relating to availability, reviews, and ratings could have been used to derive the occupancy rate. Various other description variables could have been used to extract useful information which would have helped in deriving a more accurate occupancy rate.
+
+* Due to time constraints - identifying seasonality patterns among the listings in different zip codes was ignored. Availability changes from holiday seasons to other seasons. This would be crucial in analyzing occupancy trends.
+
+* Interactive visualizations using libraries such as plotly could be developed which will allow examining changes across different scenarios real-time.
+
+* The zillow data doesn't provide any information about the property size so property size is assumed uniform across all the zip codes. External data resources could be explored to get this estimation.
